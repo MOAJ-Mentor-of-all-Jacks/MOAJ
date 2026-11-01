@@ -1,0 +1,16 @@
+# MOAJ (Mentor of all Jacks) - SQLc Code Generation Configuration
+# Implementation Target: Phase 2 (Persistence, retention-aware schema, and transactions)
+# Reference: docs/adr/ADR-01-go-sqlc-single-binary.md & docs/IMPLEMENTATION_PLAN.md §7 (Phase 2)
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "db/query"
+    schema: "db/migrations"
+    gen:
+      go:
+        package: "db"
+        out: "internal/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true

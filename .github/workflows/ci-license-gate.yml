@@ -1,0 +1,127 @@
+name: CI & Open-Core License Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verify:
+    name: Build, Vet, Static Analysis & Race Tests (Community + EE)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check Go formatting (gofmt)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Unformatted Go files detected:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet (Community & Enterprise)
+        run: |
+          go vet ./...
+          go vet -tags ee ./...
+
+      - name: Run staticcheck (Community & Enterprise)
+        uses: dominikh/staticcheck-action@v1.3.0
+        with:
+          version: "latest"
+          install-go: false
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Verify Community build never imports proprietary ee/ packages
+        run: |
+          ee_imports="$(go list -deps ./cmd/moaj | grep '^github.com/MOAJ-Mentor-of-all-Jacks/MOAJ/ee' || true)"
+          if [ -n "$ee_imports" ]; then
+            echo "::error::Community build imports proprietary ee/ packages:"
+            echo "$ee_imports"
+            exit 1
+          fi
+          echo "OK: Community dependency graph is isolated from ee/."
+
+      - name: Run unit tests with race detector (Community)
+        run: go test -v -race ./...
+
+      - name: Run unit tests with race detector (Enterprise -tags ee)
+        run: go test -v -race -tags ee ./...
+
+      - name: Compile Community & Enterprise single binaries
+        run: |
+          mkdir -p bin
+          go build -trimpath -o bin/moaj ./cmd/moaj
+          go build -trimpath -tags ee -o bin/moaj-ee ./cmd/moaj
+          ./bin/moaj version
+          ./bin/moaj-ee version
+
+  license-and-cla-gate:
+    name: Dependency License Cleanliness (NFR-03) & CLA Gate (IMS-GOV-01)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Go module allowlist (docs/governance/DEPENDENCY_LICENSES.md)
+        run: make license-check
+
+      - name: Run go-licenses check against copyleft/restricted licenses (IMS-GOV-01 §6)
+        run: |
+          go install github.com/google/go-licenses@latest
+          go-licenses check ./cmd/moaj --disallowed_types=forbidden,restricted,reciprocal,unknown
+
+      - name: Check UI dependencies license cleanliness (when ui/node_modules exists)
+        run: |
+          if [ -d "ui/node_modules" ]; then
+            npx --yes license-checker \
+              --start ui \
+              --production \
+              --onlyAllow "MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;Unlicense;CC-BY-4.0" \
+              --excludePrivatePackages
+          else
+            echo "UI dependencies not installed yet (Phase 4 scaffold); skipping npm license-checker."
+          fi
+
+      - name: Enforce Contributor License Agreement (CLA) on external Pull Requests (IMS-GOV-01 §2)
+        if: github.event_name == 'pull_request'
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ "$PR_AUTHOR" = "$REPO_OWNER" ] || [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
+            echo "PR author ($PR_AUTHOR) is repository owner or automated dependency bot; CLA satisfied."
+            exit 0
+          fi
+          if echo "$PR_BODY" | grep -Eq "I have read the CLA Document and I hereby sign the CLA"; then
+            echo "External contributor ($PR_AUTHOR) confirmed CLA signature in PR body."
+            exit 0
+          fi
+          echo "::error::External contributions require a signed Individual/Corporate CLA per IMS-GOV-01 §2 and CONTRIBUTING.md."
+          exit 1
