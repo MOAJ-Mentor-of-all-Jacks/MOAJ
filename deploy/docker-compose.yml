@@ -1,0 +1,31 @@
+# MOAJ (Mentor of all Jacks) - Local Development & Evaluation Compose Stack
+# Implementation Target: Phase 2 (PostgreSQL 16), Phase 5 (Valkey + Worker), Phase 8 (Production Community release)
+# Note: Monitoring stack (Prometheus + Grafana) is available now in deploy/monitoring/docker-compose.monitoring.yml
+# Reference: docs/adr/ADR-01-go-sqlc-single-binary.md (Decision D3: Valkey BSD-3-Clause)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: moaj
+      POSTGRES_PASSWORD: moaj_dev_password
+      POSTGRES_DB: moaj
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moaj -d moaj"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
