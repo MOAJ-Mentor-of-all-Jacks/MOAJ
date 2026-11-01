@@ -1,0 +1,34 @@
+# MOAJ (Mentor of all Jacks) - Prometheus Configuration (Phase 1 HTTP Runtime Baseline)
+#
+# Usage (local evaluation against default loopback listener):
+#   prometheus --config.file=deploy/monitoring/prometheus.yml
+#
+# Security & Authorization:
+# - In development, when MOAJ_HTTP_ADDR binds to loopback (127.0.0.1:8000 or [::1]:8000)
+#   and MOAJ_METRICS_TOKEN is unset, /metrics accepts unauthenticated loopback scrapes.
+# - In production (MOAJ_ENV=production) or whenever MOAJ_HTTP_ADDR binds beyond loopback,
+#   MOAJ_METRICS_TOKEN (>= 32 characters) is required and Prometheus must present a
+#   matching Bearer token via authorization.credentials_file.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: moaj
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: moaj
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:8000
+        labels:
+          component: http-runtime
+    # Uncomment for non-loopback or production deployments where MOAJ_METRICS_TOKEN is set:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/secrets/moaj_metrics_token
