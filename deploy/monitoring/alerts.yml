@@ -1,0 +1,81 @@
+# MOAJ (Mentor of all Jacks) - Prometheus Alerting Rules (Phase 1 Baseline)
+#
+# Every alert links to its operational runbook in docs/operations/monitoring.md.
+#
+# Planned roadmap extensions to this rule file:
+# - Phase 2 (Persistence): PostgreSQL connection pool saturation, wait duration, and query/tx error alerts.
+# - Phase 5 (Workers & Outbox): Asynq queue depth, oldest pending outbox age, and failed notification delivery alerts.
+# - Phase 6 & 7 (Scheduled Jobs & Retention): Overdue SLA sweeps, review snapshot generation failures, and retention erasure alerts.
+
+groups:
+  - name: moaj_phase1_runtime_and_http
+    interval: 15s
+    rules:
+      - alert: MOAJTargetDown
+        expr: up{job="moaj"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: http-runtime
+        annotations:
+          summary: "MOAJ HTTP runtime scrape target is down"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} (job={{ $labels.job }}) for more than 1 minute."
+          runbook_url: "docs/operations/monitoring.md#moajtargetdown"
+
+      - alert: MOAJHighServerFaultRate
+        # Explicitly measures 5xx server faults (status=~"5..") as a ratio of total traffic.
+        # Expected domain outcomes (409 stale version conflict, 428 intercept precondition required)
+        # and ordinary 4xx client errors are deliberately excluded from fault numerator calculations.
+        expr: |
+          (
+            sum by (instance) (rate(moaj_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum by (instance) (rate(moaj_http_requests_total[5m])), 1e-9)
+          ) > 0.01
+          and
+          sum by (instance) (rate(moaj_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: http-runtime
+        annotations:
+          summary: "MOAJ HTTP 5xx server fault rate exceeds 1%"
+          description: "Instance {{ $labels.instance }} is returning HTTP 5xx responses on {{ $value | humanizePercentage }} of requests over the last 5 minutes."
+          runbook_url: "docs/operations/monitoring.md#moajhighserverfaultrate"
+
+      - alert: MOAJHighRequestLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route) (rate(moaj_http_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: http-runtime
+        annotations:
+          summary: "MOAJ p95 HTTP latency exceeds 500ms on route {{ $labels.route }}"
+          description: "Route {{ $labels.route }} has a 95th percentile latency of {{ $value | humanizeDuration }} over the last 5 minutes."
+          runbook_url: "docs/operations/monitoring.md#moajhighrequestlatencyp95"
+
+      - alert: MOAJFrequentProcessRestarts
+        expr: changes(moaj_process_start_time_seconds[15m]) > 2
+        for: 0m
+        labels:
+          severity: warning
+          component: http-runtime
+        annotations:
+          summary: "MOAJ process has restarted more than twice in 15 minutes"
+          description: "Instance {{ $labels.instance }} recorded {{ $value }} process start time changes in the last 15 minutes."
+          runbook_url: "docs/operations/monitoring.md#moajfrequentprocessrestarts"
+
+      - alert: MOAJHighInFlightRequests
+        expr: moaj_http_requests_in_flight > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: http-runtime
+        annotations:
+          summary: "MOAJ in-flight HTTP requests sustained above 100"
+          description: "Instance {{ $labels.instance }} has {{ $value }} concurrent in-flight HTTP requests for more than 5 minutes."
+          runbook_url: "docs/operations/monitoring.md#moajhighinflightrequests"
